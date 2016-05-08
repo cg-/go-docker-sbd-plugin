@@ -25,7 +25,22 @@ func main() {
 	}
 
 	flag.Parse()
+
 	Usage()
+
+	// Open the block device
+	device, err := os.OpenFile("/tmp/test", os.O_RDWR, os.FileMode(0666))
+
+	if(err != nil){
+		fmt.Fprintf(os.Stdout, "Trouble opening the block device: %s", err)
+		os.Exit(1)
+	}
+	defer device.Close()
+
+	// Create a driver instance for the block device
+	d := newFsDriver("test", device)
+
+	fmt.Fprintf(os.Stdout, "%s", d.Dump())
 
 	os.Exit(0)
 
