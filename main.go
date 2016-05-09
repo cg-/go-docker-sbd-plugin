@@ -39,8 +39,8 @@ func main() {
 
 	// Create a driver instance for the block device
 	d := newFsDriver("test", device)
-
-	fmt.Fprintf(os.Stdout, "%s", d.Dump())
+	h := volume.NewHandler(d)
+	fmt.Println(h.ServeUnix("root", "sbd"))
 
 	os.Exit(0)
 
