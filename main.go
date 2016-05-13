@@ -10,13 +10,13 @@ import (
 )
 
 const (
-	suffix			= "_sbd"
+	suffix = "_sbd"
 )
 
 var (
-	defaultDir  = "/tmp"
-	root        = flag.String("root", defaultDir, "Shared block device volumes root directory")
-	bd          = flag.String("bd", "", "Shared block device")
+	defaultDir = "/tmp"
+	root       = flag.String("root", defaultDir, "Shared block device volumes root directory")
+	bd         = flag.String("bd", "", "Shared block device")
 )
 
 func main() {
