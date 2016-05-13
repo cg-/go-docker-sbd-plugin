@@ -4,7 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
+	"time"
 
 	"github.com/docker/go-plugins-helpers/volume"
 )
@@ -14,8 +14,9 @@ const (
 )
 
 var (
-	defaultDir  = filepath.Join(volume.DefaultDockerRootDirectory, suffix)
+	defaultDir  = "/tmp"
 	root        = flag.String("root", defaultDir, "Shared block device volumes root directory")
+	bd          = flag.String("bd", "", "Shared block device")
 )
 
 func main() {
@@ -26,25 +27,19 @@ func main() {
 
 	flag.Parse()
 
-	Usage()
-
-	// Open the block device
-	device, err := os.OpenFile("/tmp/test", os.O_RDWR, os.FileMode(0666))
-
-	if(err != nil){
-		fmt.Fprintf(os.Stdout, "Trouble opening the block device: %s", err)
+	if *bd == "" {
+		Usage()
 		os.Exit(1)
 	}
-	defer device.Close()
 
 	// Create a driver instance for the block device
-	d := newFsDriver("test", device)
+	d := newFsDriver(*root, *bd)
 	h := volume.NewHandler(d)
 	fmt.Println(h.ServeUnix("root", "sbd"))
 
-	os.Exit(0)
+	time.Sleep(10 * time.Second)
+	fmt.Println("remounting")
+	d.RemountAllBut("none")
 
-	//d := newFsDriver("test")
-	//h := volume.NewHandler(d)
-	//fmt.Println(h.ServeUnix("root", "glusterfs"))
+	os.Exit(0)
 }

@@ -1,12 +1,10 @@
 package main
 
 import (
-	"fmt"
 	"os"
-	"time"
-	"syscall"
-
+	//"fmt"
 	"github.com/docker/go-plugins-helpers/volume"
+	"github.com/cg-/go-nbd"
 )
 
 /**
@@ -15,33 +13,35 @@ import (
 	* with the actual block device.
 	*/
 type fsDriver struct {
-	name       string
-	mountedAt	 string
-	device		 *os.File
-	nbds 			 map[int]*NBD
+	mounts     string
+	device		 string
+	nbds 			 map[string]*nbd.NbdConnector
 }
 
 /**
 	*	Constructor.
-	* name: a name for the device
+	* mounts: where the mountpoints should be placed
 	* device: the block device to be shared
 	*/
-func newFsDriver(name string, device *os.File) fsDriver {
+func newFsDriver(mounts, device string) fsDriver {
 	d := fsDriver{
-		name:    	 name,
-		mountedAt: "",
+		mounts: 	 mounts,
 		device:		 device,
-		nbds:		   make(map[int]*NBD),
+		nbds:		   make(map[string]*nbd.NbdConnector),
 	}
-
+	// create the mount directory if it doesn't exist
+	dir := mounts
+  _, err := os.Stat(dir)
+  if os.IsNotExist(err) {
+		os.Mkdir(dir, 0777)
+  }
 	return d
 }
 
 /**
 	*	Creates a new volume.
 	*
-	* Since we are using a volume that already exists, we'll just have this
-	* return affirmatively.
+	* This will create the mountpoint on the system.
 	*/
 func (d fsDriver) Create(r volume.Request) volume.Response {
 	return volume.Response{}
@@ -62,12 +62,7 @@ func (d fsDriver) Remove(r volume.Request) volume.Response {
 	*	Returns the path to the mountpoint on the host machine.
 	*/
 func (d fsDriver) Path(r volume.Request) volume.Response {
-	// make sure it's mounted first...
-	if(d.mountedAt != ""){
-		return volume.Response{Err: "Not mounted."}
-	}
-
-	return volume.Response{Mountpoint: d.mountedAt}
+	return volume.Response{Mountpoint: d.mounts + "/" + "0"}
 }
 
 /**
@@ -80,57 +75,49 @@ func (d fsDriver) Path(r volume.Request) volume.Response {
 	* 	- Let Docker know where to access the volume
 	*/
 func (d fsDriver) Mount(r volume.Request) volume.Response {
-	stat, _ := d.device.Stat()
-	dev := Create(d.device, stat.Size(), make(chan bool))
-
-	// fire up a thread to handle the new nbd
-	go dev.Connect()
-
-	// wait for the nbd to start, and figure out what nbd it's mounted at...
-	id := 0
-	for {
-		time.Sleep(1)
-		id = dev.GetIdent()
-		if(id != 0){
-			d.nbds[id] = dev
-			break
-		}
+	dir := d.mounts + "/" + r.Name
+  _, err := os.Stat(dir)
+  if os.IsNotExist(err) {
+		os.Mkdir(dir, 0777)
+  }else{
+		return volume.Response{Err: "This mountpoint already exists. Please manully remove it if you're sure it's not being used. Otherwise choose a new name."}
 	}
 
-	// create a new directory to mount the nbd if it doesn't exist
-	devpath := fmt.Sprintf("/dev/nbd%d", id)
-	path := fmt.Sprintf("/tmp/dev_%d", id)
-	_, err := os.Stat(path)
-	if(os.IsNotExist(err)){
-		os.Mkdir(path, 0777)
-	}
-
-	// try to mount it
-	err = syscall.Mount(devpath, path, "ext3", 0xC0ED, "rw")
-	if(err != nil){
+	nbd, err := nbd.CreateNbdConnector(d.device, dir)
+	if err != nil {
 		return volume.Response{Err: err.Error()}
 	}
-
-	// set the mountedAt value
-	d.mountedAt = path
-
-	// send it to docker
-	return volume.Response{Mountpoint: d.mountedAt}
+	d.nbds[r.Name] = nbd
+	d.nbds[r.Name].Mount()
+	return volume.Response{Mountpoint: dir}
 }
 
 /**
-	*	Unmounts the volume. This is going to be tricky since it depends on what
-	* container is making the call.
+	*	Unmounts the volume.
 	*/
 func (d fsDriver) Unmount(r volume.Request) volume.Response {
-	return volume.Response{Err: "Not implemented."}
+	d.nbds[r.Name].Unmount()
+	os.RemoveAll(d.mounts + "/" + r.Name)
+	return volume.Response{}
+}
+
+/**
+	* Remounts every volume except the one specified
+	*/
+func (d fsDriver) RemountAllBut(name string) {
+	for k, _ := range d.nbds {
+		if k == name {
+			continue
+		}
+		d.nbds[k].Remount()
+	}
 }
 
 /**
 	*	Returns all the info about the volume...
 	*/
 func (d fsDriver) Get(r volume.Request) volume.Response {
-	return volume.Response{Volume: &volume.Volume{Name: d.name, Mountpoint: d.mountedAt}}
+	return volume.Response{Volume: &volume.Volume{Name: r.Name, Mountpoint: d.mounts + "/" + r.Name}}
 }
 
 /**
@@ -138,14 +125,10 @@ func (d fsDriver) Get(r volume.Request) volume.Response {
 	* is identical to Get.
 	*/
 func (d fsDriver) List(r volume.Request) volume.Response {
-	return d.Get(r)
-}
+	volStack := make([]*volume.Volume, 0)
+	for k, _ := range d.nbds {
+		volStack = append(volStack, &volume.Volume{Name: k, Mountpoint: d.mounts + "/" + k})
+	}
 
-/**
-	*
-	*/
-func (d fsDriver) Dump() string {
-	var toReturn string
-	toReturn = fmt.Sprintf("name: %s", d.name)
-	return toReturn
+	return volume.Response{Volumes: volStack}
 }
